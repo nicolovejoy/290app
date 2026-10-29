@@ -14,15 +14,24 @@ ROW = {"netid": "abc12", "name": "Ada", "email": "abc12@duke.edu"}
 CI_CONFIG = f"ci/review-pipeline.yml@{GROUP}/staff/tooling"
 
 
+GOOD_SETTINGS = {
+    "ci_config_path": CI_CONFIG,
+    "mr_default_target_self": True,
+    "ci_pipeline_variables_minimum_override_role": "no_one_allowed",
+}
+NEW_LABELS = ["set ci config", "set mr target", "locked pipeline variables"]
+
+
 def make_gl(project_exists=True, user_found=True, member_level=None, protection=None,
-            ci_config=CI_CONFIG):
+            ci_config=CI_CONFIG, settings=None):
     """Fake gitlab.Gitlab. member_level=None means not a member;
     protection=(push, merge) levels, or None for unprotected.
-    ci_config is the existing project's ci_config_path (a new fork has none)."""
+    ci_config is the existing project's ci_config_path (a new fork has none).
+    settings overrides other project settings (default: all at desired values)."""
     gl = MagicMock()
-    project = MagicMock(ci_config_path=ci_config)
+    project = MagicMock(**{**GOOD_SETTINGS, "ci_config_path": ci_config, **(settings or {})})
     fork = SimpleNamespace(id=99)  # like the real ProjectFork: no managers
-    full_project = MagicMock(ci_config_path="")
+    full_project = MagicMock(**{k: None for k in GOOD_SETTINGS})
     template = MagicMock()
     template.forks.create.return_value = fork
     missing = GitlabGetError("404", response_code=404)
@@ -68,7 +77,7 @@ def no_mutations(gl):
 def test_new_student_gets_everything():
     gl = make_gl(project_exists=False)
     actions = provision_student(gl, GROUP, ROW, dry_run=False)
-    assert actions == ["created", "set ci config", "added member", "protected main"]
+    assert actions == ["created", *NEW_LABELS, "added member", "protected main"]
     assert gl.target.ci_config_path == CI_CONFIG
     gl.target.save.assert_called_once()
     gl.template.forks.create.assert_called_once_with(
@@ -89,16 +98,23 @@ def test_already_provisioned_is_ok_and_mutates_nothing():
 def test_user_not_found_warns_but_still_forks(capsys):
     gl = make_gl(project_exists=False, user_found=False)
     actions = provision_student(gl, GROUP, ROW, dry_run=False)
-    assert actions == ["created", "set ci config"]
+    assert actions == ["created", *NEW_LABELS, "user not found"]
     assert "warning" in capsys.readouterr().out.lower()
     assert not gl.target.members.create.called
     gl.template.forks.create.assert_called_once()
 
 
+def test_user_not_found_on_existing_project_is_reported(capsys):
+    gl = make_gl(user_found=False)
+    assert provision_student(gl, GROUP, ROW, dry_run=False) == ["user not found"]
+    assert "warning" in capsys.readouterr().out.lower()
+    no_mutations(gl)
+
+
 def test_dry_run_calls_no_mutating_api():
     gl = make_gl(project_exists=False)
     actions = provision_student(gl, GROUP, ROW, dry_run=True)
-    assert actions == ["created", "set ci config", "added member", "protected main"]
+    assert actions == ["created", *NEW_LABELS, "added member", "protected main"]
     no_mutations(gl)
 
 
@@ -117,11 +133,32 @@ def test_dry_run_reports_ci_config_but_does_not_save():
     no_mutations(gl)
 
 
+def test_mr_target_and_variable_role_set_when_wrong():
+    gl = make_gl(member_level=30, protection=(0, 30),
+                 settings={"mr_default_target_self": False,
+                           "ci_pipeline_variables_minimum_override_role": "developer"})
+    actions = provision_student(gl, GROUP, ROW, dry_run=False)
+    assert actions == ["set mr target", "locked pipeline variables"]
+    assert gl.target.mr_default_target_self is True
+    assert gl.target.ci_pipeline_variables_minimum_override_role == "no_one_allowed"
+    gl.target.save.assert_called_once()
+
+
+def test_dry_run_reports_settings_but_does_not_save():
+    wrong = {"mr_default_target_self": False,
+             "ci_pipeline_variables_minimum_override_role": "developer"}
+    gl = make_gl(member_level=30, protection=(0, 30), settings=wrong)
+    actions = provision_student(gl, GROUP, ROW, dry_run=True)
+    assert actions == ["set mr target", "locked pipeline variables"]
+    assert gl.target.mr_default_target_self is False
+    no_mutations(gl)
+
+
 def test_member_at_wrong_level_is_updated():
     gl = make_gl(member_level=20, protection=(0, 30))
     member = gl.target.members.get.return_value
     actions = provision_student(gl, GROUP, ROW, dry_run=False)
-    assert actions == ["added member"]
+    assert actions == ["updated member"]
     assert member.access_level == 30
     member.save.assert_called_once()
 
