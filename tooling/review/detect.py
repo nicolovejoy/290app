@@ -1,6 +1,6 @@
 """Stage 1 (detect): which assignment folder did this MR change?
 
-Writes detect.env (ASSIGNMENT=<dir> or empty) for later jobs. If the MR
+Writes detect.env (ASSIGNMENT=<dir> or none) for later jobs. If the MR
 touches zero or several assignments, posts a note and leaves it empty.
 """
 import os
@@ -11,6 +11,9 @@ from pathlib import Path
 import gitlab
 
 ASSIGNMENT_RE = re.compile(r"^(assignments/\d{2}-[a-z0-9-]+)/")
+
+# Hidden marker so re-pushes edit our note instead of adding a new one.
+MARKER = "<!-- claude-detect -->"
 
 NONE_NOTE = (
     "No assignment detected in this merge request — changes must be inside "
@@ -27,16 +30,26 @@ def detect_assignments(changed_paths):
     return sorted(found)
 
 
+def post_note(mr, body):
+    body = f"{MARKER}\n{body}"
+    for note in mr.notes.list(get_all=True):
+        if note.body.startswith(MARKER):
+            note.body = body
+            note.save()
+            return
+    mr.notes.create({"body": body})
+
+
 def run(changed_paths, mr, out_path):
     """Write detect.env; post a note on the MR when there isn't exactly one."""
     found = detect_assignments(changed_paths)
     if len(found) == 1:
         assignment = found[0]
     else:
-        assignment = ""  # later jobs see this and skip
+        assignment = "none"  # sentinel: dotenv parsers can reject empty values; later jobs skip
         body = NONE_NOTE if not found else MANY_NOTE.format(
             found=", ".join(f"`{a}`" for a in found))
-        mr.notes.create({"body": body})
+        post_note(mr, body)
     Path(out_path).write_text(f"ASSIGNMENT={assignment}\n")
 
 

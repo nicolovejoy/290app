@@ -25,7 +25,7 @@ detect:
   extends: .with-tooling
   stage: detect
   script:
-    - python /tmp/tooling/tooling/review/detect.py
+    - python /tmp/tooling/review/detect.py
   artifacts:
     reports:
       dotenv: detect.env  # exposes ASSIGNMENT to later jobs
@@ -34,7 +34,7 @@ test:
   image: python:3.12-slim
   stage: test
   script:
-    - '[ -z "$ASSIGNMENT" ] && exit 0'  # dotenv vars aren't available to rules:, so skip here
+    - '[ "$ASSIGNMENT" = "none" ] && exit 0'  # dotenv vars aren't available to rules:, so skip here
     - |
       if [ -f "$ASSIGNMENT/package.json" ]; then
         apt-get update -qq && apt-get install -y -qq nodejs npm >/dev/null
@@ -55,5 +55,5 @@ review:
   extends: .with-tooling
   stage: review
   script:
-    - '[ -z "$ASSIGNMENT" ] && exit 0'
-    - python /tmp/tooling/tooling/review/review.py
+    - '[ "$ASSIGNMENT" = "none" ] && exit 0'
+    - python /tmp/tooling/review/review.py
