@@ -68,6 +68,22 @@ def extract_rubric(readme_text):
     return yaml.safe_load(match.group(1))["rubric"]
 
 
+def weighted_score(rubric, rubric_scores):
+    """Recommended score from the rubric weights. Claude judges; code does the arithmetic.
+
+    Criteria without a weight share whatever weight is left over, evenly.
+    """
+    explicit = sum(c["weight"] for c in rubric if "weight" in c)
+    unweighted = [c for c in rubric if "weight" not in c]
+    leftover = (1 - explicit) / len(unweighted) if unweighted else 0
+    total = 0.0
+    for c in rubric:
+        s = rubric_scores[c["id"]]
+        if s["max"]:
+            total += c.get("weight", leftover) * s["score"] / s["max"]
+    return round(total, 3)
+
+
 def git(*args):
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
 
@@ -274,6 +290,7 @@ def main():
         system, messages = build_prompt(rubric, diff, tests, session_log, diff_cut, session_cut)
         schema = build_schema([c["id"] for c in rubric])
         review = call_claude(anthropic.Anthropic(), system, messages, schema)
+        review["recommended_score"] = weighted_score(rubric, review["rubric_scores"])
     except Exception as e:
         fail(gl, env, assignment, mr, existing, tests, e)
 

@@ -14,7 +14,7 @@ from flag import LABEL  # noqa: E402
 from review import (FAILED_NOTE, MARKER, MAX_DIFF_BYTES, MAX_SESSION_BYTES, append_result,  # noqa: E402
                     build_prompt, call_claude, extract_rubric, find_review_note,
                     is_debounced, parse_junit, post_note, render_note, results_location,
-                    truncate, REVIEW_EFFORT, MAX_TOKENS, SYSTEM_PROMPT)
+                    truncate, weighted_score, REVIEW_EFFORT, MAX_TOKENS, SYSTEM_PROMPT)
 from schema import build_schema  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -274,6 +274,33 @@ def test_append_result_other_errors_propagate():
     project.files.get.side_effect = gitlab.GitlabGetError("boom", 500)
     with pytest.raises(gitlab.GitlabGetError):
         append_result(project, "p.json", {}, "m")
+
+
+# --- recommended score (computed in code, not trusted from Claude) ---
+
+def scores(**kw):
+    return {k: {"score": v, "max": 1.0, "reason": ""} for k, v in kw.items()}
+
+
+def test_weighted_score_matches_smoke_test_rubric():
+    # The live smoke test: Claude reported 0.85, the weights give 0.835.
+    rubric = extract_rubric((FIXTURES / "warmup-README.md").read_text())
+    got = weighted_score(rubric, scores(correctness=1.0, data_structure_choice=1.0,
+                                        code_quality=0.9, process=0))
+    assert got == pytest.approx(0.835)
+
+
+def test_weighted_score_splits_leftover_weight_evenly():
+    rubric = [{"id": "a", "weight": 0.4}, {"id": "b"}, {"id": "c"}]
+    # b and c share the remaining 0.6
+    assert weighted_score(rubric, scores(a=1.0, b=1.0, c=0.0)) == pytest.approx(0.7)
+
+
+def test_weighted_score_normalizes_by_max_and_ignores_zero_max():
+    rubric = [{"id": "a", "weight": 0.5}, {"id": "b", "weight": 0.5}]
+    rs = {"a": {"score": 2.0, "max": 4.0, "reason": ""},
+          "b": {"score": 0.0, "max": 0.0, "reason": ""}}
+    assert weighted_score(rubric, rs) == pytest.approx(0.25)
 
 
 # --- Claude call (mocked client) -------------------------------------
