@@ -30,7 +30,7 @@
 
 ---
 
-### Task A: tooling/provision.py
+### Task 1 (A): tooling/provision.py
 
 **Files:** Modify `tooling/provision.py` and `tooling/tests/test_provision.py`
 
@@ -56,7 +56,7 @@ Items:
 - [ ] `uv run pytest` passes.
 - [ ] Commit: `provision: updated-member label, user-not-found, MR target and variable lockdown`
 
-### Task B: CI and detect
+### Task 2 (B): CI and detect
 
 **Files:** Modify `tooling/ci/review-pipeline.yml`, `tooling/review/detect.py`, `tooling/tests/test_detect.py` and `tooling/tests/test_pipeline.py`
 
@@ -79,7 +79,7 @@ Items:
 - [ ] Tests first and see them fail; implement; `uv run pytest` passes.
 - [ ] Commit: `ci/detect: guard empty ASSIGNMENT early, update detect note by author`
 
-### Task C: tooling/review/review.py
+### Task 3 (C): tooling/review/review.py
 
 **Files:** Modify `tooling/review/review.py`, `tooling/tests/test_review.py` and `pyproject.toml`, plus the `sys.path` lines in every `tooling/tests/test_*.py`
 
@@ -96,7 +96,7 @@ Items:
 - [ ] Tests first and see them fail; implement; `uv run pytest` passes.
 - [ ] Commit: `review: separate failure note, tail-truncated session log, safe rubric cells`
 
-### Task D: dashboard/
+### Task 4 (D): dashboard/
 
 **Files:** Modify `dashboard/app.js`, `dashboard/index.html` and `dashboard/app.test.mjs`, create `tooling/tests/fixtures/flag_cases.json`, modify `tooling/tests/test_flag.py`
 
@@ -115,7 +115,7 @@ Items:
 - [ ] Tests first; `node --test dashboard/` and `uv run pytest` pass.
 - [ ] Commit: `dashboard: hidden nav, stale-render guard, default branch, batched fetch, parity fixture`
 
-### Task E: template/.claude/hooks/log_session.py
+### Task 5 (E): template/.claude/hooks/log_session.py
 
 **Files:** Modify `template/.claude/hooks/log_session.py` and `tooling/tests/test_log_session.py`
 
