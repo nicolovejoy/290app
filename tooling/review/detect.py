@@ -23,6 +23,10 @@ MANY_NOTE = (
     "This merge request changes more than one assignment ({found}). "
     "Please split it into one merge request per assignment."
 )
+DETECTED_NOTE = (
+    "Detected assignment `{assignment}`. "
+    "Earlier notes about this merge request's assignment no longer apply."
+)
 
 
 def detect_assignments(changed_paths):
@@ -30,27 +34,33 @@ def detect_assignments(changed_paths):
     return sorted(found)
 
 
-def post_note(mr, body):
-    body = f"{MARKER}\n{body}"
+def find_note(mr, bot_id):
+    """Our note on this MR, matched by marker and author so students can't spoof it."""
     for note in mr.notes.list(get_all=True):
-        if note.body.startswith(MARKER):
-            note.body = body
-            note.save()
-            return
-    mr.notes.create({"body": body})
+        if note.body.startswith(MARKER) and note.author.get("id") == bot_id:
+            return note
+    return None
 
 
-def run(changed_paths, mr, out_path):
-    """Write detect.env; post a note on the MR when there isn't exactly one."""
+def run(changed_paths, mr, out_path, bot_id):
+    """Write detect.env; keep our MR note in step with what was detected."""
     found = detect_assignments(changed_paths)
-    if len(found) == 1:
-        assignment = found[0]
+    assignment = found[0] if len(found) == 1 else "none"  # sentinel: dotenv parsers can reject empty values; later jobs skip
+    Path(out_path).write_text(f"ASSIGNMENT={assignment}\n")  # first, so a failed note call can't lose it
+    note = find_note(mr, bot_id)
+    if assignment != "none":
+        body = DETECTED_NOTE.format(assignment=assignment)
+        if note is None:
+            return  # nothing earlier to correct
     else:
-        assignment = "none"  # sentinel: dotenv parsers can reject empty values; later jobs skip
         body = NONE_NOTE if not found else MANY_NOTE.format(
             found=", ".join(f"`{a}`" for a in found))
-        post_note(mr, body)
-    Path(out_path).write_text(f"ASSIGNMENT={assignment}\n")
+    body = f"{MARKER}\n{body}"
+    if note:
+        note.body = body
+        note.save()
+    else:
+        mr.notes.create({"body": body})
 
 
 def main():
@@ -62,7 +72,8 @@ def main():
                        private_token=os.environ["REVIEW_BOT_TOKEN"])
     project = gl.projects.get(os.environ["CI_PROJECT_ID"])
     mr = project.mergerequests.get(os.environ["CI_MERGE_REQUEST_IID"])
-    run(diff.splitlines(), mr, "detect.env")
+    gl.auth()
+    run(diff.splitlines(), mr, "detect.env", gl.user.id)
 
 
 if __name__ == "__main__":

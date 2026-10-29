@@ -35,3 +35,9 @@ def test_pip_pins_match_uv_lock():
     assert {n for n, _ in pins} == {"python-gitlab", "anthropic", "pyyaml", "pytest"}
     for name, version in pins:
         assert locked[name] == version, name
+
+
+def test_guards_run_before_setup():
+    assert '""|none) exit 0' in job("review")["before_script"][0]
+    assert '""|none) exit 0' in job("test")["script"][0]
+    assert "anthropic" not in yaml.safe_dump(job("detect"))
