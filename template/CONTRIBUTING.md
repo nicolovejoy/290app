@@ -7,3 +7,7 @@
 5. Read the comments, fix what they point out, and push again. The same comment is updated on each run.
 
 One merge request per assignment. If it touches more than one assignment folder, the pipeline asks you to split it.
+
+## Session logs
+
+A hook in `.claude/` records your prompts and Claude's replies to `.claude-sessions/<date>.jsonl`. Commit these files with your work. The reviewer reads them to comment on how you worked, not only on the result. If you don't commit them, the process score is 0.
