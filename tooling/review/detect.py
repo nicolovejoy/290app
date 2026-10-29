@@ -2,6 +2,7 @@
 
 Writes detect.env (ASSIGNMENT=<dir> or none) for later jobs. If the MR
 touches zero or several assignments, posts a note and leaves it empty.
+If a later push resolves to exactly one, it edits that note to name it.
 """
 import os
 import re
@@ -45,7 +46,8 @@ def find_note(mr, bot_id):
 def run(changed_paths, mr, out_path, bot_id):
     """Write detect.env; keep our MR note in step with what was detected."""
     found = detect_assignments(changed_paths)
-    assignment = found[0] if len(found) == 1 else "none"  # sentinel: dotenv parsers can reject empty values; later jobs skip
+    # sentinel: dotenv parsers can reject empty values; later jobs skip
+    assignment = found[0] if len(found) == 1 else "none"
     Path(out_path).write_text(f"ASSIGNMENT={assignment}\n")  # first, so a failed note call can't lose it
     note = find_note(mr, bot_id)
     if assignment != "none":

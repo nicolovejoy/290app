@@ -206,8 +206,10 @@ if (typeof document !== "undefined") {
     document.getElementById("nav").hidden = !cfg;
     if (!cfg) return showForm();
     try {
-      if (!files) { app.textContent = "Loading..."; files = await fetchResults(cfg); }
+      let fetched;
+      if (!files) { app.textContent = "Loading..."; fetched = await fetchResults(cfg); }
       if (seq !== renderSeq) return;
+      if (fetched) files = fetched;
     } catch (err) {
       if (seq !== renderSeq) return;
       app.textContent = `Could not load results: ${err.message}`;
