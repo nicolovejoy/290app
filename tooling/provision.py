@@ -12,7 +12,9 @@ DEVELOPER, NO_ONE = 30, 0
 def get_or_none(manager, key):
     try:
         return manager.get(key)
-    except GitlabGetError:
+    except GitlabGetError as e:
+        if e.response_code != 404:  # 401/403/500 mean something is wrong, not "absent"
+            raise
         return None
 
 
@@ -31,9 +33,11 @@ def provision_student(gl, group, row, dry_run):
         actions.append("created")
         if not dry_run:
             template = gl.projects.get(f"{group}/staff/template")
-            project = template.forks.create(
+            fork = template.forks.create(
                 {"namespace_path": f"{group}/students", "path": netid, "name": netid}
             )
+            # The fork result is a bare object; re-fetch for members/protectedbranches.
+            project = gl.projects.get(fork.id)
 
     # The student may not have logged in to GitLab yet; re-running later fixes it.
     users = gl.users.list(username=netid)

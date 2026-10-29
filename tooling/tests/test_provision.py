@@ -1,5 +1,7 @@
 import sys
+from types import SimpleNamespace
 from pathlib import Path
+import pytest
 from unittest.mock import MagicMock
 
 from gitlab.exceptions import GitlabGetError
@@ -16,12 +18,15 @@ def make_gl(project_exists=True, user_found=True, member_level=None, protection=
     protection=(push, merge) levels, or None for unprotected."""
     gl = MagicMock()
     project = MagicMock()
-    fork = MagicMock()
+    fork = SimpleNamespace(id=99)  # like the real ProjectFork: no managers
+    full_project = MagicMock()
     template = MagicMock()
     template.forks.create.return_value = fork
-    missing = GitlabGetError("404")
+    missing = GitlabGetError("404", response_code=404)
 
     def get_project(path):
+        if path == 99:
+            return full_project
         if path.endswith("/staff/template"):
             return template
         if project_exists:
@@ -31,7 +36,7 @@ def make_gl(project_exists=True, user_found=True, member_level=None, protection=
     gl.projects.get.side_effect = get_project
     gl.users.list.return_value = [MagicMock(id=7)] if user_found else []
 
-    target = project if project_exists else fork
+    target = project if project_exists else full_project
     if member_level is None:
         target.members.get.side_effect = missing
     else:
@@ -106,3 +111,11 @@ def test_wrong_protection_is_recreated():
     assert actions == ["protected main"]
     gl.target.protectedbranches.delete.assert_called_once_with("main")
     gl.target.protectedbranches.create.assert_called_once()
+
+
+def test_server_error_on_project_lookup_propagates():
+    gl = make_gl()
+    gl.projects.get.side_effect = GitlabGetError("boom", response_code=500)
+    with pytest.raises(GitlabGetError):
+        provision_student(gl, GROUP, ROW, dry_run=False)
+    assert not gl.template.forks.create.called
