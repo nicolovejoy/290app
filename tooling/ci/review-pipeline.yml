@@ -1,5 +1,11 @@
-# Review pipeline, included by every student project (see template/.gitlab-ci.yml).
-# Runs only on merge request pipelines. Group-level CI variables: REVIEW_BOT_TOKEN, COURSE_GROUP.
+# Review pipeline for every student project. provision.py points each project's
+# ci_config_path here, so a student's own .gitlab-ci.yml is never used.
+# Runs only on merge request pipelines.
+#
+# Group-level CI variables: COURSE_GROUP, plus two secrets, REVIEW_BOT_TOKEN and
+# ANTHROPIC_API_KEY. Set both secrets as masked with environment scope `review-bot`.
+# Only jobs that declare that environment (detect, review) receive them; the
+# `test` job runs student code, so it must never declare it or use a secret.
 
 workflow:
   rules:
@@ -19,7 +25,12 @@ variables:
   before_script:
     - apt-get update -qq && apt-get install -y -qq git >/dev/null
     - git clone --depth 1 https://gitlab-ci-token:${REVIEW_BOT_TOKEN}@${CI_SERVER_HOST}/${COURSE_GROUP}/staff/tooling.git /tmp/tooling
-    - pip install -q python-gitlab anthropic pyyaml
+    # Same versions as uv.lock, so CI runs the SDKs the tests ran against.
+    - pip install -q python-gitlab==8.6.0 anthropic==2.3.0 pyyaml==6.0.3
+  # prepare: gives access to review-bot-scoped secrets without recording a deployment.
+  environment:
+    name: review-bot
+    action: prepare
 
 detect:
   extends: .with-tooling
@@ -41,7 +52,7 @@ test:
         export JEST_JUNIT_OUTPUT_DIR="$CI_PROJECT_DIR" JEST_JUNIT_OUTPUT_NAME=junit.xml
         (cd "$ASSIGNMENT" && npm ci && npx jest --ci --reporters=default --reporters=jest-junit) || true
       else
-        pip install -q pytest
+        pip install -q pytest==9.2.0
         pytest "$ASSIGNMENT/tests" --junitxml=junit.xml || true
       fi
   # Failing tests must not stop the pipeline: the score comes from the XML.

@@ -39,6 +39,15 @@ def provision_student(gl, group, row, dry_run):
             # The fork result is a bare object; re-fetch for members/protectedbranches.
             project = gl.projects.get(fork.id)
 
+    # An MR pipeline would otherwise run the source branch's own .gitlab-ci.yml,
+    # which the student can edit. Developers can't change this project setting.
+    ci_config = f"ci/review-pipeline.yml@{group}/staff/tooling"
+    if project is None or project.ci_config_path != ci_config:
+        actions.append("set ci config")
+        if not dry_run:
+            project.ci_config_path = ci_config
+            project.save()
+
     # The student may not have logged in to GitLab yet; re-running later fixes it.
     users = gl.users.list(username=netid)
     if not users:

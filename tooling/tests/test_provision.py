@@ -11,15 +11,18 @@ from provision import provision_student  # noqa: E402
 
 GROUP = "duke-cs-claude-fa26"
 ROW = {"netid": "abc12", "name": "Ada", "email": "abc12@duke.edu"}
+CI_CONFIG = f"ci/review-pipeline.yml@{GROUP}/staff/tooling"
 
 
-def make_gl(project_exists=True, user_found=True, member_level=None, protection=None):
+def make_gl(project_exists=True, user_found=True, member_level=None, protection=None,
+            ci_config=CI_CONFIG):
     """Fake gitlab.Gitlab. member_level=None means not a member;
-    protection=(push, merge) levels, or None for unprotected."""
+    protection=(push, merge) levels, or None for unprotected.
+    ci_config is the existing project's ci_config_path (a new fork has none)."""
     gl = MagicMock()
-    project = MagicMock()
+    project = MagicMock(ci_config_path=ci_config)
     fork = SimpleNamespace(id=99)  # like the real ProjectFork: no managers
-    full_project = MagicMock()
+    full_project = MagicMock(ci_config_path="")
     template = MagicMock()
     template.forks.create.return_value = fork
     missing = GitlabGetError("404", response_code=404)
@@ -59,12 +62,15 @@ def no_mutations(gl):
     assert not t.members.create.called
     assert not t.protectedbranches.create.called
     assert not t.protectedbranches.delete.called
+    assert not t.save.called
 
 
 def test_new_student_gets_everything():
     gl = make_gl(project_exists=False)
     actions = provision_student(gl, GROUP, ROW, dry_run=False)
-    assert actions == ["created", "added member", "protected main"]
+    assert actions == ["created", "set ci config", "added member", "protected main"]
+    assert gl.target.ci_config_path == CI_CONFIG
+    gl.target.save.assert_called_once()
     gl.template.forks.create.assert_called_once_with(
         {"namespace_path": f"{GROUP}/students", "path": "abc12", "name": "abc12"}
     )
@@ -83,7 +89,7 @@ def test_already_provisioned_is_ok_and_mutates_nothing():
 def test_user_not_found_warns_but_still_forks(capsys):
     gl = make_gl(project_exists=False, user_found=False)
     actions = provision_student(gl, GROUP, ROW, dry_run=False)
-    assert actions == ["created"]
+    assert actions == ["created", "set ci config"]
     assert "warning" in capsys.readouterr().out.lower()
     assert not gl.target.members.create.called
     gl.template.forks.create.assert_called_once()
@@ -92,7 +98,22 @@ def test_user_not_found_warns_but_still_forks(capsys):
 def test_dry_run_calls_no_mutating_api():
     gl = make_gl(project_exists=False)
     actions = provision_student(gl, GROUP, ROW, dry_run=True)
-    assert actions == ["created", "added member", "protected main"]
+    assert actions == ["created", "set ci config", "added member", "protected main"]
+    no_mutations(gl)
+
+
+def test_wrong_ci_config_is_set():
+    # Without this, an MR pipeline runs the student branch's own .gitlab-ci.yml.
+    gl = make_gl(member_level=30, protection=(0, 30), ci_config="")
+    assert provision_student(gl, GROUP, ROW, dry_run=False) == ["set ci config"]
+    assert gl.target.ci_config_path == CI_CONFIG
+    gl.target.save.assert_called_once()
+
+
+def test_dry_run_reports_ci_config_but_does_not_save():
+    gl = make_gl(member_level=30, protection=(0, 30), ci_config="")
+    assert provision_student(gl, GROUP, ROW, dry_run=True) == ["set ci config"]
+    assert gl.target.ci_config_path == ""
     no_mutations(gl)
 
 
