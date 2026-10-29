@@ -1,0 +1,12 @@
+[
+  {"name": "clean", "record": {"recommended_score": 0.9, "needs_human": false, "needs_human_reason": "", "integrity_flag": false, "rubric_scores": {"correctness": {"score": 1.0, "max": 1.0}}, "test_passed": 5, "test_total": 5}, "flagged": false},
+  {"name": "integrity flag", "record": {"recommended_score": 0.9, "needs_human": false, "needs_human_reason": "", "integrity_flag": true, "rubric_scores": {"correctness": {"score": 1.0, "max": 1.0}}, "test_passed": 5, "test_total": 5}, "flagged": true},
+  {"name": "needs human", "record": {"recommended_score": 0.9, "needs_human": true, "needs_human_reason": "odd diff", "integrity_flag": false, "rubric_scores": {"correctness": {"score": 1.0, "max": 1.0}}, "test_passed": 5, "test_total": 5}, "flagged": true},
+  {"name": "score 0.59", "record": {"recommended_score": 0.59, "needs_human": false, "needs_human_reason": "", "integrity_flag": false, "rubric_scores": {"correctness": {"score": 1.0, "max": 1.0}}, "test_passed": 5, "test_total": 5}, "flagged": true},
+  {"name": "score exactly 0.6", "record": {"recommended_score": 0.6, "needs_human": false, "needs_human_reason": "", "integrity_flag": false, "rubric_scores": {"correctness": {"score": 1.0, "max": 1.0}}, "test_passed": 5, "test_total": 5}, "flagged": false},
+  {"name": "disagreement 0.5", "record": {"recommended_score": 0.9, "needs_human": false, "needs_human_reason": "", "integrity_flag": false, "rubric_scores": {"correctness": {"score": 0.5, "max": 1.0}}, "test_passed": 10, "test_total": 10}, "flagged": true},
+  {"name": "disagreement exactly 0.2", "record": {"recommended_score": 0.9, "needs_human": false, "needs_human_reason": "", "integrity_flag": false, "rubric_scores": {"correctness": {"score": 1.0, "max": 1.0}}, "test_passed": 4, "test_total": 5}, "flagged": false},
+  {"name": "disagreement 3/5 vs 1.0", "record": {"recommended_score": 0.9, "needs_human": false, "needs_human_reason": "", "integrity_flag": false, "rubric_scores": {"correctness": {"score": 1.0, "max": 1.0}}, "test_passed": 3, "test_total": 5}, "flagged": true},
+  {"name": "zero tests", "record": {"recommended_score": 0.9, "needs_human": false, "needs_human_reason": "", "integrity_flag": false, "rubric_scores": {"correctness": {"score": 0.0, "max": 1.0}}, "test_passed": 0, "test_total": 0}, "flagged": false},
+  {"name": "no correctness criterion", "record": {"recommended_score": 0.9, "needs_human": false, "needs_human_reason": "", "integrity_flag": false, "rubric_scores": {}, "test_passed": 0, "test_total": 10}, "flagged": false}
+]

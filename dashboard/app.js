@@ -76,6 +76,13 @@ export function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+// Splits arr into batches of at most n, so we don't open 100 requests at once.
+export function chunk(arr, n) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
 // ---- GitLab API ----
 
 async function api(cfg, path) {
@@ -89,8 +96,8 @@ async function listJsonPaths(cfg) {
   const paths = [];
   for (let page = "1"; page;) {
     const res = await api(cfg, `/repository/tree?recursive=true&per_page=100&page=${page}`);
-    for (const e of await res.json()) {
-      if (e.type === "blob" && parsePath(e.path)) paths.push(e.path);
+    for (const item of await res.json()) {
+      if (item.type === "blob" && parsePath(item.path)) paths.push(item.path);
     }
     page = res.headers.get("x-next-page"); // empty on the last page
   }
@@ -100,10 +107,13 @@ async function listJsonPaths(cfg) {
 export async function fetchResults(cfg) {
   const files = {};
   const paths = await listJsonPaths(cfg);
-  await Promise.all(paths.map(async (p) => {
-    const res = await api(cfg, `/repository/files/${encodeURIComponent(p)}/raw?ref=main`);
-    files[p] = await res.json();
-  }));
+  const branch = (await (await api(cfg, "")).json()).default_branch;
+  for (const batch of chunk(paths, 10)) {
+    await Promise.all(batch.map(async (p) => {
+      const res = await api(cfg, `/repository/files/${encodeURIComponent(p)}/raw?ref=${encodeURIComponent(branch)}`);
+      files[p] = await res.json();
+    }));
+  }
   return files;
 }
 
@@ -171,6 +181,7 @@ if (typeof document !== "undefined") {
   const KEY = "dashboard-config";
   const app = document.getElementById("app");
   let files = null;
+  let renderSeq = 0; // a newer render() makes older, slower ones give up
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } };
 
   function showForm() {
@@ -190,12 +201,15 @@ if (typeof document !== "undefined") {
   }
 
   async function render() {
+    const seq = ++renderSeq;
     const cfg = load();
     document.getElementById("nav").hidden = !cfg;
     if (!cfg) return showForm();
     try {
       if (!files) { app.textContent = "Loading..."; files = await fetchResults(cfg); }
+      if (seq !== renderSeq) return;
     } catch (err) {
+      if (seq !== renderSeq) return;
       app.textContent = `Could not load results: ${err.message}`;
       return;
     }
