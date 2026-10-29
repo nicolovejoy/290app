@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   latestRun, isFlagged, urgencySort, buildGrid, parsePath, mrUrl, groupOf, escapeHtml,
+  gridView, flaggedView, studentView,
 } from "./app.js";
 
 // Builds a record with sane, unflagged defaults.
@@ -101,4 +102,33 @@ test("escapeHtml neutralises markup", () => {
 
 test("isFlagged: integrity_flag", () => {
   assert.equal(isFlagged(rec({ integrity_flag: true })), true);
+});
+
+// What review.py stores when the automated review itself failed: no review fields.
+const failed = { status: "failed", mr_iid: 3, commit_sha: "def",
+  timestamp: "2026-10-04T00:00:00Z", test_passed: 0, test_total: 0 };
+
+test("isFlagged: failed review", () => {
+  assert.equal(isFlagged(failed), true);
+});
+
+test("views render a failed review without throwing", () => {
+  const cfg = { url: "https://gl.example", project: "g/staff/results" };
+  const files = { "01-warmup/aaa.json": [rec(), failed], "01-warmup/bbb.json": [rec({ recommended_score: 0.3 })] };
+  const grid = gridView(files);
+  assert.match(grid, /score —/);
+  const flagged = flaggedView(files, cfg);
+  assert.match(flagged, /review failed/);
+  assert.doesNotMatch(flagged, /undefined|NaN/);
+  const student = studentView(files, "aaa", cfg);
+  assert.match(student, /0\.90 &rarr; —/);
+  assert.doesNotMatch(student, /undefined|NaN/);
+});
+
+test("urgencySort: failed reviews sort with needs_human", () => {
+  const rows = [
+    { netid: "low", run: rec({ recommended_score: 0.2 }) },
+    { netid: "failed", run: failed },
+  ];
+  assert.deepEqual(urgencySort(rows).map((r) => r.netid), ["failed", "low"]);
 });

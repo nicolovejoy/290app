@@ -5,9 +5,11 @@ use them without a network; main() at the bottom wires up the real clients.
 """
 import json
 import os
+import random
 import re
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -116,7 +118,9 @@ def call_claude(client, system, messages, schema):
     if response.stop_reason != "end_turn":
         raise ValueError(f"no complete answer (stop_reason={response.stop_reason}; "
                          "a max_tokens stop means the JSON was cut off)")
-    text = next(b.text for b in response.content if b.type == "text")
+    text = next((b.text for b in response.content if b.type == "text"), None)
+    if text is None:
+        raise ValueError("response has no text block")
     review = json.loads(text)  # JSONDecodeError is a ValueError
     missing = [k for k in TOP_KEYS if k not in review]
     if missing:
@@ -185,8 +189,8 @@ def results_location(assignment, netid, mr_iid):
     return f"{slug}/{netid}.json", f"review: {netid} {slug} !{mr_iid}"
 
 
-def append_result(project, file_path, record, message):
-    """Append one run record to a JSON array file in the results project."""
+def write_result_once(project, file_path, record, message):
+    """Read the JSON array file, append one record, write it back."""
     branch = project.default_branch
     try:
         f = project.files.get(file_path=file_path, ref=branch)
@@ -199,11 +203,49 @@ def append_result(project, file_path, record, message):
         return
     records = json.loads(f.decode())
     records.append(record)
-    f.content = json.dumps(records, indent=2)
-    f.save(branch=branch, commit_message=message)
+    # last_commit_id: GitLab refuses the write if the file changed since we read it.
+    project.files.update(file_path, {"branch": branch, "content": json.dumps(records, indent=2),
+                                     "commit_message": message, "last_commit_id": f.last_commit_id})
+
+
+def append_result(project, file_path, record, message, sleep=time.sleep, attempts=3):
+    """Append one run record, retrying when another job wrote the same file first."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return write_result_once(project, file_path, record, message)
+        except (gitlab.GitlabCreateError, gitlab.GitlabUpdateError) as e:
+            # 400/409 = lost the race (file created, or changed, under us). Others are real errors.
+            if e.response_code not in (400, 409) or attempt == attempts:
+                raise
+            sleep(random.uniform(0.5, 2.0))  # jitter so two racing jobs don't collide again
 
 
 # --- wiring -----------------------------------------------------------
+
+def run_record(env, tests, fields):
+    """One results-file entry: the review (or a failure status) plus run metadata."""
+    return {**fields, "mr_iid": int(env["CI_MERGE_REQUEST_IID"]), "commit_sha": env["CI_COMMIT_SHA"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "test_passed": tests[0], "test_total": tests[1]}
+
+
+def save_result(gl, env, assignment, record):
+    results = gl.projects.get(env.get("RESULTS_PROJECT") or f"{env['COURSE_GROUP']}/staff/results")
+    path, message = results_location(assignment, env["CI_PROJECT_NAME"], env["CI_MERGE_REQUEST_IID"])
+    append_result(results, path, record, message)
+
+
+def fail(gl, env, assignment, mr, existing, tests, error):
+    """Tell the student, flag for a TA, and leave a trace on the dashboard. Always exits 1."""
+    print(f"Review failed: {error!r}", file=sys.stderr)
+    post_note(mr, existing, f"{MARKER}\n{FAILED_NOTE}")
+    add_label(mr)
+    try:  # best effort: the note and label above already reached a human
+        save_result(gl, env, assignment, run_record(env, tests, {"status": "failed"}))
+    except Exception as e:
+        print(f"Could not record the failure either: {e!r}", file=sys.stderr)
+    sys.exit(1)
+
 
 def main():
     assignment = os.environ.get("ASSIGNMENT", "none")
@@ -214,41 +256,33 @@ def main():
     env = os.environ
     gl = gitlab.Gitlab(env["CI_SERVER_URL"], private_token=env["REVIEW_BOT_TOKEN"])
     mr = gl.projects.get(env["CI_PROJECT_ID"]).mergerequests.get(env["CI_MERGE_REQUEST_IID"])
-    gl.auth()  # populates gl.user so we can tell the bot's notes from a student's
-    existing = find_review_note(mr, gl.user.id)
-    if is_debounced(existing):
-        print("Reviewed less than 10 minutes ago, skipping.")
-        return
+    tests = parse_junit("junit.xml")  # never raises: a missing file is 0 of 0
+    existing = None
 
-    base = env["CI_MERGE_REQUEST_DIFF_BASE_SHA"]
-    diff, diff_cut = truncate(git("diff", f"{base}...HEAD", "--", assignment), MAX_DIFF_BYTES)
-    session_log, session_cut = truncate(read_session_logs(base), MAX_SESSION_BYTES)
-    tests = parse_junit("junit.xml")
-    rubric = extract_rubric(Path(assignment, "README.md").read_text())
-
+    # Anything that goes wrong from here on must still leave a note and a label,
+    # not just a red job nobody looks at.
     try:
+        gl.auth()  # populates gl.user so we can tell the bot's notes from a student's
+        existing = find_review_note(mr, gl.user.id)
+        if is_debounced(existing):
+            print("Reviewed less than 10 minutes ago, skipping.")
+            return
+        base = env["CI_MERGE_REQUEST_DIFF_BASE_SHA"]
+        diff, diff_cut = truncate(git("diff", f"{base}...HEAD", "--", assignment), MAX_DIFF_BYTES)
+        session_log, session_cut = truncate(read_session_logs(base), MAX_SESSION_BYTES)
+        rubric = extract_rubric(Path(assignment, "README.md").read_text())
         system, messages = build_prompt(rubric, diff, tests, session_log, diff_cut, session_cut)
         schema = build_schema([c["id"] for c in rubric])
         review = call_claude(anthropic.Anthropic(), system, messages, schema)
-    except (anthropic.APIError, ValueError) as e:
-        print(f"Review failed: {e}", file=sys.stderr)
-        post_note(mr, existing, f"{MARKER}\n{FAILED_NOTE}")
-        add_label(mr)
-        sys.exit(1)
+    except Exception as e:
+        fail(gl, env, assignment, mr, existing, tests, e)
 
     post_note(mr, existing, render_note(review, tests, diff_cut))
     flagged, reason = should_flag(review, *tests)
     if flagged:
         print(f"Flagged for a human: {reason}")
         add_label(mr)
-
-    netid = env["CI_PROJECT_NAME"]
-    record = {**review, "mr_iid": int(env["CI_MERGE_REQUEST_IID"]), "commit_sha": env["CI_COMMIT_SHA"],
-              "timestamp": datetime.now(timezone.utc).isoformat(),
-              "test_passed": tests[0], "test_total": tests[1]}
-    results = gl.projects.get(env.get("RESULTS_PROJECT") or f"{env['COURSE_GROUP']}/staff/results")
-    path, message = results_location(assignment, netid, env["CI_MERGE_REQUEST_IID"])
-    append_result(results, path, record, message)
+    save_result(gl, env, assignment, run_record(env, tests, review))
 
 
 if __name__ == "__main__":

@@ -9,7 +9,9 @@ import gitlab
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "review"))
-from review import (MARKER, MAX_DIFF_BYTES, MAX_SESSION_BYTES, append_result,  # noqa: E402
+import review  # noqa: E402
+from flag import LABEL  # noqa: E402
+from review import (FAILED_NOTE, MARKER, MAX_DIFF_BYTES, MAX_SESSION_BYTES, append_result,  # noqa: E402
                     build_prompt, call_claude, extract_rubric, find_review_note,
                     is_debounced, parse_junit, post_note, render_note, results_location,
                     truncate, REVIEW_EFFORT, MAX_TOKENS, SYSTEM_PROMPT)
@@ -218,10 +220,53 @@ def test_append_result_updates_existing_array():
     project = MagicMock(default_branch="main")
     f = project.files.get.return_value
     f.decode.return_value = json.dumps([{"old": 1}]).encode()
+    f.last_commit_id = "c0ffee"
     append_result(project, "p.json", {"new": 2}, "msg")
-    assert json.loads(f.content) == [{"old": 1}, {"new": 2}]
-    f.save.assert_called_once_with(branch="main", commit_message="msg")
+    path, data = project.files.update.call_args[0]
+    assert path == "p.json" and json.loads(data["content"]) == [{"old": 1}, {"new": 2}]
+    # last_commit_id makes GitLab reject our write if someone else wrote first.
+    assert data["branch"] == "main" and data["commit_message"] == "msg" and data["last_commit_id"] == "c0ffee"
     project.files.create.assert_not_called()
+
+
+def test_append_result_retries_after_conflict():
+    project = MagicMock(default_branch="main")
+    project.files.get.return_value.decode.return_value = b"[]"
+    project.files.update.side_effect = [gitlab.GitlabUpdateError("stale", 400), None]
+    sleep = MagicMock()
+    append_result(project, "p.json", {"new": 2}, "msg", sleep=sleep)
+    assert project.files.get.call_count == 2  # re-read before retrying
+    assert project.files.update.call_count == 2
+    sleep.assert_called_once()
+
+
+def test_append_result_retries_racing_create():
+    project = MagicMock(default_branch="main")
+    project.files.get.side_effect = [gitlab.GitlabGetError("nope", 404), MagicMock(
+        decode=MagicMock(return_value=b"[]"))]
+    project.files.create.side_effect = gitlab.GitlabCreateError("exists", 400)
+    append_result(project, "p.json", {"a": 1}, "msg", sleep=MagicMock())
+    assert project.files.update.call_count == 1
+
+
+def test_append_result_gives_up_after_three_attempts():
+    project = MagicMock(default_branch="main")
+    project.files.get.return_value.decode.return_value = b"[]"
+    project.files.update.side_effect = gitlab.GitlabUpdateError("stale", 409)
+    sleep = MagicMock()
+    with pytest.raises(gitlab.GitlabUpdateError):
+        append_result(project, "p.json", {}, "msg", sleep=sleep)
+    assert project.files.update.call_count == 3
+    assert sleep.call_count == 2
+
+
+def test_append_result_does_not_retry_other_errors():
+    project = MagicMock(default_branch="main")
+    project.files.get.return_value.decode.return_value = b"[]"
+    project.files.update.side_effect = gitlab.GitlabUpdateError("forbidden", 403)
+    with pytest.raises(gitlab.GitlabUpdateError):
+        append_result(project, "p.json", {}, "msg", sleep=MagicMock())
+    assert project.files.update.call_count == 1
 
 
 def test_append_result_other_errors_propagate():
@@ -272,6 +317,61 @@ def test_call_claude_missing_rubric_id_raises():
 def test_call_claude_cut_off_raises():
     with pytest.raises(ValueError, match="max_tokens"):
         call_claude(fake_client("{}", stop_reason="max_tokens"), [], [], build_schema([]))
+
+
+def test_call_claude_no_text_block_raises():
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        stop_reason="end_turn", content=[SimpleNamespace(type="thinking")])
+    with pytest.raises(ValueError, match="no text"):
+        call_claude(client, [], [], build_schema([]))
+
+
+# --- main(): failure path (fake GitLab, no network) -------------------
+
+def fake_main_env(monkeypatch, tmp_path):
+    """A CI job whose assignment README is missing, so main() fails before calling Claude."""
+    monkeypatch.chdir(tmp_path)
+    for k, v in {"ASSIGNMENT": "assignments/01-warmup", "CI_SERVER_URL": "https://gl.example",
+                 "REVIEW_BOT_TOKEN": "t", "CI_PROJECT_ID": "1", "CI_MERGE_REQUEST_IID": "5",
+                 "CI_MERGE_REQUEST_DIFF_BASE_SHA": "base", "CI_PROJECT_NAME": "abc12",
+                 "CI_COMMIT_SHA": "sha1", "COURSE_GROUP": "g"}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("RESULTS_PROJECT", raising=False)
+    monkeypatch.setattr(review, "git", lambda *a: "")
+    gl, mr, results = MagicMock(), MagicMock(labels=[]), MagicMock(default_branch="main")
+    gl.user.id = BOT_ID
+    mr.notes.list.return_value = []
+    results.files.get.side_effect = gitlab.GitlabGetError("nope", 404)
+    student = MagicMock()
+    student.mergerequests.get.return_value = mr
+    gl.projects.get.side_effect = lambda p: results if p == "g/staff/results" else student
+    monkeypatch.setattr(review.gitlab, "Gitlab", lambda *a, **k: gl)
+    return mr, results
+
+
+def test_main_failure_posts_note_labels_records_and_exits_nonzero(monkeypatch, tmp_path):
+    mr, results = fake_main_env(monkeypatch, tmp_path)
+    with pytest.raises(SystemExit) as exit_info:
+        review.main()
+    assert exit_info.value.code == 1
+    mr.notes.create.assert_called_once_with({"body": f"{MARKER}\n{FAILED_NOTE}"})
+    assert LABEL in mr.labels
+    data = results.files.create.call_args[0][0]
+    assert data["file_path"] == "01-warmup/abc12.json"
+    [record] = json.loads(data["content"])
+    assert record["status"] == "failed" and record["mr_iid"] == 5 and record["commit_sha"] == "sha1"
+    assert record["test_passed"] == 0 and record["test_total"] == 0 and record["timestamp"]
+
+
+def test_main_failure_still_exits_nonzero_when_record_write_fails(monkeypatch, tmp_path):
+    mr, results = fake_main_env(monkeypatch, tmp_path)
+    results.files.create.side_effect = gitlab.GitlabCreateError("forbidden", 403)
+    with pytest.raises(SystemExit) as exit_info:
+        review.main()
+    assert exit_info.value.code == 1
+    mr.notes.create.assert_called_once()
+    assert LABEL in mr.labels
 
 
 def test_limits_match_brief():

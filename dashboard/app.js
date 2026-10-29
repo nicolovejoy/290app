@@ -6,7 +6,9 @@ const MIN_SCORE = 0.6;
 const MAX_DISAGREEMENT = 0.2;
 
 // Mirrors should_flag() in tooling/review/flag.py, boundaries included.
+// A failed run (status "failed") has no review fields, so a human must look.
 export function isFlagged(run) {
+  if (run.status === "failed") return true;
   if (run.integrity_flag) return true;
   if (run.needs_human) return true;
   if (run.recommended_score < MIN_SCORE) return true;
@@ -25,11 +27,11 @@ export function latestRun(records) {
   return records.reduce((a, b) => (b.timestamp >= a.timestamp ? b : a));
 }
 
-// rows: [{netid, run, ...}]. Integrity first, then needs_human, then lowest score.
+// rows: [{netid, run, ...}]. Integrity first, then needs_human or failed, then lowest score.
 export function urgencySort(rows) {
-  const rank = (r) => (r.run.integrity_flag ? 0 : r.run.needs_human ? 1 : 2);
-  return [...rows].sort(
-    (a, b) => rank(a) - rank(b) || a.run.recommended_score - b.run.recommended_score);
+  const rank = (r) => (r.run.integrity_flag ? 0 : r.run.needs_human || r.run.status === "failed" ? 1 : 2);
+  const score = (r) => r.run.recommended_score ?? 0; // failed runs have no score
+  return [...rows].sort((a, b) => rank(a) - rank(b) || score(a) - score(b));
 }
 
 // "01-warmup/abc123.json" -> {assignment, netid}; anything else -> null.
@@ -108,7 +110,8 @@ export async function fetchResults(cfg) {
 // ---- Views (return HTML strings; every record field goes through escapeHtml) ----
 
 const e = escapeHtml;
-const pct = (x) => x.toFixed(2);
+const pct = (x) => (typeof x === "number" ? x.toFixed(2) : "—"); // failed runs have no score
+const summary = (run) => (run.status === "failed" ? "Automated review failed." : run.summary);
 
 function link(cfg, netid, run) {
   const href = mrUrl(cfg.url, cfg.project, netid, run.mr_iid);
@@ -139,10 +142,11 @@ export function flaggedView(files, cfg) {
     if (run && isFlagged(run)) rows.push({ ...p, netid: p.netid, run });
   }
   const items = urgencySort(rows).map(({ netid, assignment, run }) => {
-    const why = run.integrity_flag ? "INTEGRITY" : run.needs_human ? "needs human" : "";
+    const why = run.integrity_flag ? "INTEGRITY" : run.needs_human ? "needs human"
+      : run.status === "failed" ? "review failed" : "";
     return `<tr><td><a href="#/student/${e(netid)}">${e(netid)}</a></td><td>${e(assignment)}</td>` +
       `<td>${why}</td><td>${pct(run.recommended_score)}</td>` +
-      `<td>${e(run.needs_human_reason || run.summary)}</td><td>${link(cfg, netid, run)}</td></tr>`;
+      `<td>${e(run.needs_human_reason || summary(run))}</td><td>${link(cfg, netid, run)}</td></tr>`;
   }).join("");
   return `<div class="scroll"><table><tr><th>student</th><th>assignment</th><th></th>` +
     `<th>score</th><th>why</th><th>MR</th></tr>${items || '<tr><td colspan="6">Nothing flagged.</td></tr>'}</table></div>`;
@@ -155,7 +159,7 @@ export function studentView(files, netid, cfg) {
       const trend = records.map((r) => pct(r.recommended_score)).join(" &rarr; ");
       const runs = records.map((r) =>
         `<li>${e(r.timestamp)}: ${e(r.test_passed)}/${e(r.test_total)} tests, ` +
-        `score ${pct(r.recommended_score)} ${link(cfg, netid, r)}<br>${e(r.summary)}</li>`).join("");
+        `score ${pct(r.recommended_score)} ${link(cfg, netid, r)}<br>${e(summary(r))}</li>`).join("");
       return `<h3>${e(parsePath(path).assignment)}</h3><p>Trend: ${trend}</p><ul>${runs}</ul>`;
     }).join("");
   return `<h2>${e(netid)}</h2>${blocks || "<p>No submissions.</p>"}`;
