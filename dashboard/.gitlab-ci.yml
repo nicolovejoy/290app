@@ -1,0 +1,11 @@
+# Publish the static dashboard with GitLab Pages.
+pages:
+  stage: deploy
+  script:
+    - mkdir -p public
+    - cp index.html app.js public/
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
