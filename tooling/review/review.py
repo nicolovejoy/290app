@@ -33,6 +33,8 @@ DEBOUNCE = timedelta(minutes=10)
 
 # Hidden marker so re-pushes edit our note instead of adding a new one.
 MARKER = "<!-- claude-review -->"
+# A failure gets its own note so it never overwrites an earlier good review.
+FAIL_MARKER = "<!-- claude-review-failed -->"
 
 # Located relative to this file: cwd is the student's project, not staff/tooling.
 SYSTEM_PROMPT = (Path(__file__).parent / "prompt.md").read_text()
@@ -42,12 +44,13 @@ FAILED_NOTE = "Automated review failed. A TA will look at this merge request."
 
 # --- inputs -----------------------------------------------------------
 
-def truncate(text, limit):
-    """Cut to `limit` bytes. Returns (text, was_cut)."""
+def truncate(text, limit, keep="head"):
+    """Cut to `limit` bytes, keeping the start or (keep="tail") the end. Returns (text, was_cut)."""
     raw = text.encode()
     if len(raw) <= limit:
         return text, False
-    return raw[:limit].decode(errors="ignore"), True  # ignore: drop a split character
+    cut = raw[-limit:] if keep == "tail" else raw[:limit]
+    return cut.decode(errors="ignore"), True  # ignore: drop a split character
 
 
 def parse_junit(path):
@@ -90,7 +93,7 @@ def git(*args):
 
 def read_session_logs(base_sha):
     """Session logs touched by this MR, as one opaque string ('' if none)."""
-    changed = git("diff", "--name-only", f"{base_sha}...HEAD", "--", ".claude-sessions").split()
+    changed = git("diff", "--name-only", f"{base_sha}...HEAD", "--", ".claude-sessions").splitlines()
     logs = [Path(p).read_text() for p in changed if p.endswith(".jsonl") and Path(p).exists()]
     return "\n".join(logs)
 
@@ -149,7 +152,12 @@ def call_claude(client, system, messages, schema):
 
 # --- output -----------------------------------------------------------
 
-def render_note(review, tests, diff_cut):
+def cell(text):
+    """Make text safe inside a markdown table cell."""
+    return text.replace("|", "\\|").replace("\r\n", " ").replace("\n", " ")
+
+
+def render_note(review, tests, diff_cut, session_cut=False):
     passed, total = tests
     lines = [
         MARKER,
@@ -163,11 +171,13 @@ def render_note(review, tests, diff_cut):
     ]
     if diff_cut:
         lines.append(f"_The diff was truncated at {MAX_DIFF_BYTES} bytes; code past that was not reviewed._")
+    if session_cut:
+        lines.append(f"_The session log was truncated at {MAX_SESSION_BYTES} bytes; only the newest part was reviewed._")
     lines += ["", "### Comments"]
     lines += [f"- `{c['file']}:{c['line']}` — {c['severity']} — {c['text']}" for c in review["comments"]]
     lines += ["", "### Rubric", "| Criterion | Score | Reason |", "| --- | --- | --- |"]
     for name, s in review["rubric_scores"].items():
-        lines.append(f"| {name} | {s['score']:.2f} / {s['max']} | {s['reason']} |")
+        lines.append(f"| {cell(name)} | {s['score']:.2f} / {s['max']} | {cell(s['reason'])} |")
     lines += ["", f"**Recommended score: {review['recommended_score']:.2f}**", "", "### Next steps"]
     # The schema (spec 4.2) has no next-steps field, so derive them from the actionable comments.
     todo = [c for c in review["comments"] if c["severity"] != "info"]
@@ -177,10 +187,10 @@ def render_note(review, tests, diff_cut):
     return "\n".join(lines)
 
 
-def find_review_note(mr, bot_id):
+def find_review_note(mr, bot_id, marker=MARKER):
     """Our note: has the marker AND was written by the bot (students can paste the marker)."""
     return next((n for n in mr.notes.list(get_all=True)
-                 if n.body.startswith(MARKER) and n.author["id"] == bot_id), None)
+                 if n.body.startswith(marker) and n.author.get("id") == bot_id), None)
 
 
 def is_debounced(note):
@@ -251,10 +261,12 @@ def save_result(gl, env, assignment, record):
     append_result(results, path, record, message)
 
 
-def fail(gl, env, assignment, mr, existing, tests, error):
+def fail(gl, env, assignment, mr, tests, error):
     """Tell the student, flag for a TA, and leave a trace on the dashboard. Always exits 1."""
     print(f"Review failed: {error!r}", file=sys.stderr)
-    post_note(mr, existing, f"{MARKER}\n{FAILED_NOTE}")
+    # gl.user is unset if gl.auth() itself failed; then no old failure note is found and we post a new one.
+    old = find_review_note(mr, getattr(gl.user, "id", None), FAIL_MARKER)
+    post_note(mr, old, f"{FAIL_MARKER}\n{FAILED_NOTE}")
     add_label(mr)
     try:  # best effort: the note and label above already reached a human
         save_result(gl, env, assignment, run_record(env, tests, {"status": "failed"}))
@@ -285,16 +297,16 @@ def main():
             return
         base = env["CI_MERGE_REQUEST_DIFF_BASE_SHA"]
         diff, diff_cut = truncate(git("diff", f"{base}...HEAD", "--", assignment), MAX_DIFF_BYTES)
-        session_log, session_cut = truncate(read_session_logs(base), MAX_SESSION_BYTES)
+        session_log, session_cut = truncate(read_session_logs(base), MAX_SESSION_BYTES, keep="tail")
         rubric = extract_rubric(Path(assignment, "README.md").read_text())
         system, messages = build_prompt(rubric, diff, tests, session_log, diff_cut, session_cut)
         schema = build_schema([c["id"] for c in rubric])
         review = call_claude(anthropic.Anthropic(), system, messages, schema)
         review["recommended_score"] = weighted_score(rubric, review["rubric_scores"])
     except Exception as e:
-        fail(gl, env, assignment, mr, existing, tests, e)
+        fail(gl, env, assignment, mr, tests, e)
 
-    post_note(mr, existing, render_note(review, tests, diff_cut))
+    post_note(mr, existing, render_note(review, tests, diff_cut, session_cut))
     flagged, reason = should_flag(review, *tests)
     if flagged:
         print(f"Flagged for a human: {reason}")

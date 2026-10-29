@@ -1,9 +1,6 @@
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "review"))
-from flag import LABEL, add_label, should_flag  # noqa: E402
+from flag import LABEL, add_label, should_flag
 
 
 def review(score=0.9, needs_human=False, correctness=1.0, reason=None):

@@ -1,5 +1,4 @@
 import json
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,14 +7,13 @@ from unittest.mock import MagicMock
 import gitlab
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "review"))
-import review  # noqa: E402
-from flag import LABEL  # noqa: E402
-from review import (FAILED_NOTE, MARKER, MAX_DIFF_BYTES, MAX_SESSION_BYTES, append_result,  # noqa: E402
+import review
+from flag import LABEL
+from review import (FAIL_MARKER, FAILED_NOTE, MARKER, MAX_DIFF_BYTES, MAX_SESSION_BYTES, append_result,
                     build_prompt, call_claude, extract_rubric, find_review_note,
-                    is_debounced, parse_junit, post_note, render_note, results_location,
+                    is_debounced, read_session_logs, parse_junit, post_note, render_note, results_location,
                     truncate, weighted_score, REVIEW_EFFORT, MAX_TOKENS, SYSTEM_PROMPT)
-from schema import build_schema  # noqa: E402
+from schema import build_schema
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -136,8 +134,32 @@ def test_render_note_has_marker_and_recommendation_wording():
 
 def test_render_note_mentions_truncation_and_human():
     note = render_note(sample_review(needs_human=True, needs_human_reason="odd"), (0, 0),
-                       diff_cut=True)
+                       diff_cut=True, session_cut=True)
     assert "truncated" in note and "TA" in note and "odd" in note
+    assert f"session log was truncated at {MAX_SESSION_BYTES} bytes" in note
+
+
+def test_truncate_tail_keeps_newest_bytes():
+    assert truncate("abcdef", 3, keep="tail") == ("def", True)
+    assert truncate("abc", 3, keep="tail") == ("abc", False)
+    text, cut = truncate("é" * 10, 5, keep="tail")  # 5 bytes starts mid-character
+    assert cut and text == "é" * 2
+
+
+def test_read_session_logs_handles_paths_with_spaces(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    Path(".claude-sessions").mkdir()
+    Path(".claude-sessions/my log.jsonl").write_text("{}")
+    monkeypatch.setattr(review, "git", lambda *a: ".claude-sessions/my log.jsonl\n")
+    assert read_session_logs("base") == "{}"
+
+
+def test_render_note_escapes_pipes_and_newlines_in_rubric_cells():
+    rs = {"corr|ect": {"score": 1.0, "max": 1.0, "reason": "a | b\nc"}}
+    note = render_note(sample_review(rubric_scores=rs), (1, 1), diff_cut=False)
+    [row] = [ln for ln in note.splitlines() if ln.startswith("| corr")]
+    assert row.replace("\\|", "").count("|") == 4
+    assert "a \\| b c" in row
 
 
 # --- gitlab notes -----------------------------------------------------
@@ -165,6 +187,14 @@ def test_find_review_note_ignores_marker_from_non_bot():
     mr.notes.list.return_value = [forged, mine]
     assert find_review_note(mr, BOT_ID) is mine
     mr.notes.list.return_value = [forged]
+    assert find_review_note(mr, BOT_ID) is None
+
+
+def test_find_review_note_skips_note_without_author_id():
+    mr = MagicMock()
+    odd = make_note(f"{MARKER}\nx", 1)
+    odd.author = {}
+    mr.notes.list.return_value = [odd]
     assert find_review_note(mr, BOT_ID) is None
 
 
@@ -209,9 +239,9 @@ def test_results_location_uses_slug_only():
 def test_append_result_creates_missing_file():
     project = MagicMock(default_branch="main")
     project.files.get.side_effect = gitlab.GitlabGetError("nope", 404)
-    append_result(project, "assignments/01-warmup/alice.json", {"a": 1}, "msg")
+    append_result(project, "01-warmup/alice.json", {"a": 1}, "msg")
     data = project.files.create.call_args[0][0]
-    assert data["file_path"] == "assignments/01-warmup/alice.json"
+    assert data["file_path"] == "01-warmup/alice.json"
     assert data["branch"] == "main" and data["commit_message"] == "msg"
     assert json.loads(data["content"]) == [{"a": 1}]
 
@@ -382,7 +412,7 @@ def test_main_failure_posts_note_labels_records_and_exits_nonzero(monkeypatch, t
     with pytest.raises(SystemExit) as exit_info:
         review.main()
     assert exit_info.value.code == 1
-    mr.notes.create.assert_called_once_with({"body": f"{MARKER}\n{FAILED_NOTE}"})
+    mr.notes.create.assert_called_once_with({"body": f"{FAIL_MARKER}\n{FAILED_NOTE}"})
     assert LABEL in mr.labels
     data = results.files.create.call_args[0][0]
     assert data["file_path"] == "01-warmup/abc12.json"
@@ -399,6 +429,16 @@ def test_main_failure_still_exits_nonzero_when_record_write_fails(monkeypatch, t
     assert exit_info.value.code == 1
     mr.notes.create.assert_called_once()
     assert LABEL in mr.labels
+
+
+def test_failure_does_not_overwrite_good_review(monkeypatch, tmp_path):
+    mr, _ = fake_main_env(monkeypatch, tmp_path)
+    good = make_note(f"{MARKER}\ngood review", 30)
+    mr.notes.list.return_value = [good]
+    with pytest.raises(SystemExit):
+        review.main()
+    good.save.assert_not_called()
+    mr.notes.create.assert_called_once_with({"body": f"{FAIL_MARKER}\n{FAILED_NOTE}"})
 
 
 def test_limits_match_brief():

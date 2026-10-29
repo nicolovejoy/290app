@@ -1,9 +1,6 @@
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "review"))
-from detect import MARKER, detect_assignments, run  # noqa: E402
+from detect import MARKER, detect_assignments, run
 
 BOT_ID = 42
 

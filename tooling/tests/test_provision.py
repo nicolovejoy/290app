@@ -1,13 +1,10 @@
-import sys
 from types import SimpleNamespace
-from pathlib import Path
 import pytest
 from unittest.mock import MagicMock
 
 from gitlab.exceptions import GitlabGetError
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from provision import provision_student  # noqa: E402
+from provision import provision_student
 
 GROUP = "duke-cs-claude-fa26"
 ROW = {"netid": "abc12", "name": "Ada", "email": "abc12@duke.edu"}
