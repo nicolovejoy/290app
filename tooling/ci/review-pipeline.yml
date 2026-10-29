@@ -1,0 +1,70 @@
+# Review pipeline for every student project. provision.py points each project's
+# ci_config_path here, so a student's own .gitlab-ci.yml is never used.
+# Runs only on merge request pipelines.
+#
+# Group-level CI variables: COURSE_GROUP, plus two secrets, REVIEW_BOT_TOKEN and
+# ANTHROPIC_API_KEY. Set both secrets as masked with environment scope `review-bot`.
+# Only jobs that declare that environment (detect, review) receive them; the
+# `test` job runs student code, so it must never declare it or use a secret.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+stages: [detect, test, review]
+
+variables:
+  GIT_DEPTH: "0"  # detect diffs against the MR base SHA, so it needs full history
+
+# Image choice: python:3.12-slim everywhere. It has no Node, so the test job
+# installs nodejs only when the assignment is a jest one (package.json).
+
+# detect and review run scripts from staff/tooling, so they clone it first.
+.with-tooling:
+  image: python:3.12-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git >/dev/null
+    - git clone --depth 1 https://gitlab-ci-token:${REVIEW_BOT_TOKEN}@${CI_SERVER_HOST}/${COURSE_GROUP}/staff/tooling.git /tmp/tooling
+    # Same versions as uv.lock, so CI runs the SDKs the tests ran against.
+    - pip install -q python-gitlab==8.6.0 anthropic==2.3.0 pyyaml==6.0.3
+  # prepare: gives access to review-bot-scoped secrets without recording a deployment.
+  environment:
+    name: review-bot
+    action: prepare
+
+detect:
+  extends: .with-tooling
+  stage: detect
+  script:
+    - python /tmp/tooling/review/detect.py
+  artifacts:
+    reports:
+      dotenv: detect.env  # exposes ASSIGNMENT to later jobs
+
+test:
+  image: python:3.12-slim
+  stage: test
+  script:
+    - '[ "$ASSIGNMENT" = "none" ] && exit 0'  # dotenv vars aren't available to rules:, so skip here
+    - |
+      if [ -f "$ASSIGNMENT/package.json" ]; then
+        apt-get update -qq && apt-get install -y -qq nodejs npm >/dev/null
+        export JEST_JUNIT_OUTPUT_DIR="$CI_PROJECT_DIR" JEST_JUNIT_OUTPUT_NAME=junit.xml
+        (cd "$ASSIGNMENT" && npm ci && npx jest --ci --reporters=default --reporters=jest-junit) || true
+      else
+        pip install -q pytest==9.2.0
+        pytest "$ASSIGNMENT/tests" --junitxml=junit.xml || true
+      fi
+  # Failing tests must not stop the pipeline: the score comes from the XML.
+  artifacts:
+    when: always
+    paths: [junit.xml]
+    reports:
+      junit: junit.xml
+
+review:
+  extends: .with-tooling
+  stage: review
+  script:
+    - '[ "$ASSIGNMENT" = "none" ] && exit 0'
+    - python /tmp/tooling/review/review.py

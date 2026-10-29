@@ -1,0 +1,9 @@
+# Fallback and documentation only. provision.py sets each student project's
+# ci_config_path to ci/review-pipeline.yml@<group>/staff/tooling, so GitLab
+# ignores this file (and any student edits to it).
+# Instructor: replace TERM with the term code (e.g. fa26) once per term.
+# (include:project does not reliably interpolate variables across GitLab versions.)
+include:
+  - project: duke-cs-claude-TERM/staff/tooling
+    ref: main
+    file: ci/review-pipeline.yml

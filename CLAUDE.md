@@ -4,7 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Pre-code. The only source of truth is `init.md`, the v0.1 platform spec for "Coding with Claude" (Duke, ~100 students). There is no code, no build/test tooling, and no git repo yet. Read `init.md` before doing anything; update this file with real commands once components exist.
+`init.md` is the v0.1 platform spec for "Coding with Claude" (Duke, ~100 students) and is binding. The week-one build (spec §5 steps 1–5) lives on branch `week1-build`; plan in `docs/superpowers/plans/2026-10-29-week1-build.md`. Nothing has run against a real GitLab or the live Claude API yet. Repo: github.com/nicolovejoy/290app (public); open questions for Owen are GitHub issues #1–#8 — #7 (CI secrets isolation) blocks the first real student pipeline.
+
+## Commands
+
+- `uv sync` — set up the Python env (Python >= 3.12, deps in root `pyproject.toml`)
+- `uv run pytest` — all tooling tests (only `tooling/tests/`; assignment tests under `template/` are student tests run by CI)
+- `uv run pytest tooling/tests/test_review.py -k debounce` — single test
+- `node --test dashboard/` — dashboard logic tests (no npm deps)
+- `uv run python tooling/provision.py --csv roster.csv --group duke-cs-claude-<term> --dry-run` — needs `GITLAB_TOKEN`
+- Tests never touch the network; GitLab and Anthropic clients are faked.
 
 ## What is being built
 
@@ -33,11 +42,17 @@ Invariants to preserve:
 
 The spec's week-one builds are done live in front of the class, each as a commit in `staff/tooling` tagged `week1-step-<n>`: provision.py → CI test stage → review.py → dashboard v1 → session-logging hook. Keep each step small and readable as a teaching diff; don't fold later steps into earlier ones.
 
-## Unresolved in the spec
+## Decisions taken (pending Owen's confirmation in issue #2)
 
-Don't silently pick an answer for these; ask:
+- Flag (`needs-review`) when `integrity_flag`, `needs_human`, failed review, `recommended_score < 0.6`, or `|test pass rate − Claude's correctness| > 0.2`. Rule lives in `tooling/review/flag.py` and is mirrored in `dashboard/app.js` — change both together.
+- Claude's `correctness` score is its own judgment from reading code, not the test pass rate (otherwise the disagreement check is a no-op).
+- Results path: `staff/results/<slug>/<netid>.json` (e.g. `01-warmup/abc123.json`), a JSON array of runs.
+- One assignment per MR; `detect.env` writes `ASSIGNMENT=none` as the skip sentinel.
+- Secrets (`REVIEW_BOT_TOKEN`, `ANTHROPIC_API_KEY`) only reach the `detect`/`review` jobs via the `review-bot` environment; the `test` job runs student code and must never reference a secret. `provision.py` sets each student project's `ci_config_path` so branch `.gitlab-ci.yml` edits are ignored.
+- CI pip versions are pinned to `uv.lock` (`tooling/tests/test_pipeline.py` enforces it) — bump both together.
 
-- Section 7 OPEN items: session-log opt-in timeline, flag threshold, student project choice, integrity-check scope.
-- Flag disagreement rule conflicts: §3.4 says "> 2 rubric points", §7 proposes "> 0.2" (scores are 0–1).
-- Results file layout conflicts: §3.5 says one file per `(netid, assignment, mr_iid)`, §4.3 says `staff/results/<assignment>/<netid>.json` holding an array of runs.
-- §6 prerequisites (Duke IT data policy/FERPA, capped API key, GitLab runner and token availability) are unconfirmed.
+## Still open
+
+- Spec §7 items and §6 prerequisites (data policy/FERPA, capped API key, GitLab tier/runners) — issues #1, #3–#6.
+- #7: environment-scoped group variables need GitLab Premium+; if Duke is on Free, secret isolation needs a different design.
+- #8: trailing debounce for deadline pushes; running canonical tests instead of students' copies.
