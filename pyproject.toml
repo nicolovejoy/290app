@@ -1,0 +1,15 @@
+[project]
+name = "course-platform"
+version = "0.1.0"
+description = "GitLab-based coursework submission with automated Claude reviews"
+requires-python = ">=3.12"
+dependencies = ["python-gitlab", "anthropic", "pyyaml"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tooling/tests"]
