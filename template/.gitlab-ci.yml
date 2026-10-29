@@ -1,0 +1,7 @@
+# Students cannot change the pipeline: it lives in staff/tooling.
+# Instructor: replace TERM with the term code (e.g. fa26) once per term.
+# (include:project does not reliably interpolate variables across GitLab versions.)
+include:
+  - project: duke-cs-claude-TERM/staff/tooling
+    ref: main
+    file: ci/review-pipeline.yml

@@ -1,0 +1,59 @@
+# Review pipeline, included by every student project (see template/.gitlab-ci.yml).
+# Runs only on merge request pipelines. Group-level CI variables: REVIEW_BOT_TOKEN, COURSE_GROUP.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+stages: [detect, test, review]
+
+variables:
+  GIT_DEPTH: "0"  # detect diffs against the MR base SHA, so it needs full history
+
+# Image choice: python:3.12-slim everywhere. It has no Node, so the test job
+# installs nodejs only when the assignment is a jest one (package.json).
+
+# detect and review run scripts from staff/tooling, so they clone it first.
+.with-tooling:
+  image: python:3.12-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git >/dev/null
+    - git clone --depth 1 https://gitlab-ci-token:${REVIEW_BOT_TOKEN}@${CI_SERVER_HOST}/${COURSE_GROUP}/staff/tooling.git /tmp/tooling
+    - pip install -q python-gitlab anthropic pyyaml
+
+detect:
+  extends: .with-tooling
+  stage: detect
+  script:
+    - python /tmp/tooling/tooling/review/detect.py
+  artifacts:
+    reports:
+      dotenv: detect.env  # exposes ASSIGNMENT to later jobs
+
+test:
+  image: python:3.12-slim
+  stage: test
+  script:
+    - '[ -z "$ASSIGNMENT" ] && exit 0'  # dotenv vars aren't available to rules:, so skip here
+    - |
+      if [ -f "$ASSIGNMENT/package.json" ]; then
+        apt-get update -qq && apt-get install -y -qq nodejs npm >/dev/null
+        export JEST_JUNIT_OUTPUT_DIR="$CI_PROJECT_DIR" JEST_JUNIT_OUTPUT_NAME=junit.xml
+        (cd "$ASSIGNMENT" && npm ci && npx jest --ci --reporters=default --reporters=jest-junit) || true
+      else
+        pip install -q pytest
+        pytest "$ASSIGNMENT/tests" --junitxml=junit.xml || true
+      fi
+  # Failing tests must not stop the pipeline: the score comes from the XML.
+  artifacts:
+    when: always
+    paths: [junit.xml]
+    reports:
+      junit: junit.xml
+
+review:
+  extends: .with-tooling
+  stage: review
+  script:
+    - '[ -z "$ASSIGNMENT" ] && exit 0'
+    - python /tmp/tooling/tooling/review/review.py
