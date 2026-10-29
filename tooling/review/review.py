@@ -22,7 +22,11 @@ from schema import TOP_KEYS, build_schema
 REVIEW_MODEL = os.environ.get("REVIEW_MODEL", "claude-sonnet-5-5")
 MAX_DIFF_BYTES = 60_000
 MAX_SESSION_BYTES = 20_000
-MAX_TOKENS = 4096
+# Sonnet 5.5 always thinks, and thinking tokens count against max_tokens, so
+# 4096 would often end in max_tokens. Medium effort keeps thinking modest and
+# 16000 leaves room for the thinking plus the JSON review.
+MAX_TOKENS = 16000
+REVIEW_EFFORT = "medium"
 DEBOUNCE = timedelta(minutes=10)
 
 # Hidden marker so re-pushes edit our note instead of adding a new one.
@@ -106,7 +110,8 @@ def call_claude(client, system, messages, schema):
         max_tokens=MAX_TOKENS,
         system=system,
         messages=messages,
-        output_config={"format": {"type": "json_schema", "schema": schema}},
+        output_config={"effort": REVIEW_EFFORT,
+                      "format": {"type": "json_schema", "schema": schema}},
     )
     if response.stop_reason != "end_turn":
         raise ValueError(f"no complete answer (stop_reason={response.stop_reason}; "
@@ -152,8 +157,10 @@ def render_note(review, tests, diff_cut):
     return "\n".join(lines)
 
 
-def find_review_note(mr):
-    return next((n for n in mr.notes.list(get_all=True) if n.body.startswith(MARKER)), None)
+def find_review_note(mr, bot_id):
+    """Our note: has the marker AND was written by the bot (students can paste the marker)."""
+    return next((n for n in mr.notes.list(get_all=True)
+                 if n.body.startswith(MARKER) and n.author["id"] == bot_id), None)
 
 
 def is_debounced(note):
@@ -170,6 +177,12 @@ def post_note(mr, existing, body):
         existing.save()
     else:
         mr.notes.create({"body": body})
+
+
+def results_location(assignment, netid, mr_iid):
+    """Spec 4.3: <slug>/<netid>.json, e.g. 01-warmup/abc123.json, plus the commit message."""
+    slug = Path(assignment).name
+    return f"{slug}/{netid}.json", f"review: {netid} {slug} !{mr_iid}"
 
 
 def append_result(project, file_path, record, message):
@@ -201,7 +214,8 @@ def main():
     env = os.environ
     gl = gitlab.Gitlab(env["CI_SERVER_URL"], private_token=env["REVIEW_BOT_TOKEN"])
     mr = gl.projects.get(env["CI_PROJECT_ID"]).mergerequests.get(env["CI_MERGE_REQUEST_IID"])
-    existing = find_review_note(mr)
+    gl.auth()  # populates gl.user so we can tell the bot's notes from a student's
+    existing = find_review_note(mr, gl.user.id)
     if is_debounced(existing):
         print("Reviewed less than 10 minutes ago, skipping.")
         return
@@ -233,8 +247,8 @@ def main():
               "timestamp": datetime.now(timezone.utc).isoformat(),
               "test_passed": tests[0], "test_total": tests[1]}
     results = gl.projects.get(env.get("RESULTS_PROJECT") or f"{env['COURSE_GROUP']}/staff/results")
-    append_result(results, f"{assignment}/{netid}.json", record,
-                  f"review: {netid} {assignment} !{env['CI_MERGE_REQUEST_IID']}")
+    path, message = results_location(assignment, netid, env["CI_MERGE_REQUEST_IID"])
+    append_result(results, path, record, message)
 
 
 if __name__ == "__main__":

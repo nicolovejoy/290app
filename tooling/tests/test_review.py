@@ -11,7 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "review"))
 from review import (MARKER, MAX_DIFF_BYTES, MAX_SESSION_BYTES, append_result,  # noqa: E402
                     build_prompt, call_claude, extract_rubric, find_review_note,
-                    is_debounced, parse_junit, post_note, render_note, truncate)
+                    is_debounced, parse_junit, post_note, render_note, results_location,
+                    truncate, REVIEW_EFFORT, MAX_TOKENS)
 from schema import build_schema  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -133,22 +134,36 @@ def test_render_note_mentions_truncation_and_human():
 
 # --- gitlab notes -----------------------------------------------------
 
-def make_note(body, minutes_ago):
+BOT_ID = 7
+
+
+def make_note(body, minutes_ago, author_id=BOT_ID):
     ts = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
-    return SimpleNamespace(body=body, updated_at=ts.isoformat().replace("+00:00", "Z"), save=MagicMock())
+    return SimpleNamespace(body=body, updated_at=ts.isoformat().replace("+00:00", "Z"), save=MagicMock(),
+                           author={"id": author_id})
 
 
 def test_find_review_note_ignores_other_notes():
     mr = MagicMock()
     mine = make_note(f"{MARKER}\nhi", 1)
     mr.notes.list.return_value = [make_note("<!-- claude-detect -->\nx", 1), mine]
-    assert find_review_note(mr) is mine
+    assert find_review_note(mr, BOT_ID) is mine
+
+
+def test_find_review_note_ignores_marker_from_non_bot():
+    mr = MagicMock()
+    forged = make_note(f"{MARKER}\nfake", 1, author_id=99)
+    mine = make_note(f"{MARKER}\nreal", 30)
+    mr.notes.list.return_value = [forged, mine]
+    assert find_review_note(mr, BOT_ID) is mine
+    mr.notes.list.return_value = [forged]
+    assert find_review_note(mr, BOT_ID) is None
 
 
 def test_find_review_note_none():
     mr = MagicMock()
     mr.notes.list.return_value = []
-    assert find_review_note(mr) is None
+    assert find_review_note(mr, BOT_ID) is None
 
 
 def test_debounce_recent_note_skips():
@@ -176,6 +191,12 @@ def test_post_note_edits_when_present():
 
 
 # --- results ----------------------------------------------------------
+
+def test_results_location_uses_slug_only():
+    path, message = results_location("assignments/01-warmup", "abc123", "5")
+    assert path == "01-warmup/abc123.json"
+    assert message == "review: abc123 01-warmup !5"
+
 
 def test_append_result_creates_missing_file():
     project = MagicMock(default_branch="main")
@@ -220,7 +241,9 @@ def test_call_claude_returns_parsed_review_and_sends_schema():
     assert out["recommended_score"] == 0.85
     kwargs = client.messages.create.call_args.kwargs
     assert kwargs["model"] == "claude-sonnet-5-5"
-    assert kwargs["max_tokens"] == 4096
+    assert kwargs["max_tokens"] == MAX_TOKENS == 16000
+    assert kwargs["output_config"]["effort"] == REVIEW_EFFORT == "medium"
+    assert "thinking" not in kwargs  # Sonnet 5.5: disabled is a 400; effort is the control
     assert kwargs["output_config"]["format"] == {"type": "json_schema", "schema": schema}
 
 
