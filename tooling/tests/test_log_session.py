@@ -61,6 +61,30 @@ def test_stop_reads_last_assistant_from_transcript(tmp_path):
     assert row["event"] == "response" and row["text"] == "Hello world"
 
 
+def test_stop_skips_tool_only_assistant_entry(tmp_path):
+    t = tmp_path / "t.jsonl"
+    write_transcript(t, [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "answer"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}},
+    ])
+    payload = json.dumps({"session_id": "s1", "hook_event_name": "Stop",
+                          "transcript_path": str(t), "cwd": "/nowhere"})
+    run_hook(tmp_path, payload)
+    assert lines(tmp_path)[0]["text"] == "answer"
+
+
+def test_empty_payload_message_falls_back_to_transcript(tmp_path):
+    t = tmp_path / "t.jsonl"
+    write_transcript(t, [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "from transcript"}]}},
+    ])
+    payload = json.dumps({"session_id": "s1", "hook_event_name": "Stop",
+                          "last_assistant_message": "", "transcript_path": str(t),
+                          "cwd": "/nowhere"})
+    run_hook(tmp_path, payload)
+    assert lines(tmp_path)[0]["text"] == "from transcript"
+
+
 def test_stop_payload_field_preferred(tmp_path):
     # the transcript is written asynchronously and can lag the payload
     payload = json.dumps({"session_id": "s1", "hook_event_name": "Stop",

@@ -1,9 +1,10 @@
-import sys
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "review"))
-from flag import LABEL, add_label, should_flag  # noqa: E402
+import pytest
+
+from flag import LABEL, add_label, should_flag
 
 
 def review(score=0.9, needs_human=False, correctness=1.0, reason=None):
@@ -75,3 +76,13 @@ def test_integrity_flag_flags():
     r = review()
     r["integrity_flag"] = True
     assert should_flag(r, 10, 10) == (True, "integrity flag")
+
+
+# Same file is read by dashboard/app.test.mjs, so both flag rules stay in parity.
+CASES = json.loads((Path(__file__).parent / "fixtures" / "flag_cases.json").read_text())
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
+def test_shared_flag_cases(case):
+    r = case["record"]
+    assert should_flag(r, r["test_passed"], r["test_total"])[0] == case["flagged"]

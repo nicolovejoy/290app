@@ -19,13 +19,16 @@ def get_or_none(manager, key):
 
 
 def is_protected_correctly(branch):
-    pushes = [l["access_level"] for l in branch.push_access_levels]
-    merges = [l["access_level"] for l in branch.merge_access_levels]
+    pushes = [level["access_level"] for level in branch.push_access_levels]
+    merges = [level["access_level"] for level in branch.merge_access_levels]
     return pushes == [NO_ONE] and merges == [DEVELOPER]
 
 
 def provision_student(gl, group, row, dry_run):
-    """Bring one student's project to the desired state; return what changed."""
+    """Bring one student's project to the desired state; return what changed.
+
+    Forks are created asynchronously, so if protecting main fails right after
+    a fork, just re-run provision."""
     netid, actions = row["netid"], []
 
     project = get_or_none(gl.projects, f"{group}/students/{netid}")
@@ -39,20 +42,33 @@ def provision_student(gl, group, row, dry_run):
             # The fork result is a bare object; re-fetch for members/protectedbranches.
             project = gl.projects.get(fork.id)
 
-    # An MR pipeline would otherwise run the source branch's own .gitlab-ci.yml,
-    # which the student can edit. Developers can't change this project setting.
-    ci_config = f"ci/review-pipeline.yml@{group}/staff/tooling"
-    if project is None or project.ci_config_path != ci_config:
-        actions.append("set ci config")
-        if not dry_run:
-            project.ci_config_path = ci_config
-            project.save()
+    # label -> (attribute, desired value). Developers can't change these settings.
+    settings = {
+        # An MR pipeline would otherwise run the source branch's own .gitlab-ci.yml,
+        # which the student can edit.
+        "set ci config": ("ci_config_path", f"ci/review-pipeline.yml@{group}/staff/tooling"),
+        # MRs target the student's own project, not staff/template.
+        "set mr target": ("mr_default_target_self", True),
+        # Hardening for issue #7: nobody can override CI variables on a pipeline run.
+        "locked pipeline variables": (
+            "ci_pipeline_variables_minimum_override_role", "no_one_allowed"),
+    }
+    changed = [
+        label for label, (attr, want) in settings.items()
+        if project is None or getattr(project, attr, None) != want
+    ]
+    actions += changed
+    if changed and not dry_run:
+        for label in changed:
+            attr, want = settings[label]
+            setattr(project, attr, want)
+        project.save()
 
     # The student may not have logged in to GitLab yet; re-running later fixes it.
     users = gl.users.list(username=netid)
     if not users:
         print(f"warning: no GitLab user '{netid}' yet, skipping membership")
-        return actions
+        return actions + ["user not found"]
 
     if project is None:  # dry run, project doesn't exist yet: nothing to inspect
         return actions + ["added member", "protected main"]
@@ -63,7 +79,7 @@ def provision_student(gl, group, row, dry_run):
         if not dry_run:
             project.members.create({"user_id": users[0].id, "access_level": DEVELOPER})
     elif member.access_level != DEVELOPER:
-        actions.append("added member")
+        actions.append("updated member")
         if not dry_run:
             member.access_level = DEVELOPER
             member.save()

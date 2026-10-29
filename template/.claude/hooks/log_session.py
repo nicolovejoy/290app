@@ -13,12 +13,14 @@ MAX_CHARS = 2000
 
 
 def last_assistant_text(transcript_path):
-    # Walk backwards: the last assistant entry is the reply that just finished.
-    for line in reversed(Path(transcript_path).read_text().splitlines()):
+    # Walk backwards to the last assistant entry with text; tool-only entries are skipped.
+    for line in reversed(Path(transcript_path).read_text(encoding="utf-8").splitlines()):
         entry = json.loads(line)
         if entry.get("type") == "assistant":
             parts = entry["message"]["content"]
-            return "".join(p["text"] for p in parts if p.get("type") == "text")
+            text = "".join(p["text"] for p in parts if p.get("type") == "text")
+            if text:
+                return text
     return ""
 
 
@@ -31,7 +33,7 @@ def build_row(data):
         text = data.get("last_assistant_message") or last_assistant_text(data["transcript_path"])
     now = datetime.now().astimezone()
     return now, {"ts": now.isoformat(), "session_id": data["session_id"],
-                 "event": event, "text": text[:MAX_CHARS]}
+                 "event": event, "text": str(text)[:MAX_CHARS]}
 
 
 def main():

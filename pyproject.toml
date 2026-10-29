@@ -13,3 +13,4 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tooling/tests"]
+pythonpath = ["tooling", "tooling/review"]

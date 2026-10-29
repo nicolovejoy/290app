@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   latestRun, isFlagged, urgencySort, buildGrid, parsePath, mrUrl, groupOf, escapeHtml,
-  gridView, flaggedView, studentView,
+  gridView, flaggedView, studentView, chunk,
 } from "./app.js";
 
 // Builds a record with sane, unflagged defaults.
@@ -132,3 +133,27 @@ test("urgencySort: failed reviews sort with needs_human", () => {
   ];
   assert.deepEqual(urgencySort(rows).map((r) => r.netid), ["failed", "low"]);
 });
+
+test("chunk splits into batches of n", () => {
+  assert.deepEqual(chunk([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+  assert.deepEqual(chunk([], 10), []);
+});
+
+test("views escape a <script> summary", () => {
+  const bad = "<script>alert(1)</script>";
+  const files = { "01-a/abc.json": [rec({ summary: bad, needs_human: true, needs_human_reason: bad })] };
+  const cfg = { url: "https://gl.example", project: "g/staff/results" };
+  for (const html of [gridView(files), flaggedView(files, cfg), studentView(files, "abc", cfg)]) {
+    assert.ok(!html.includes("<script"));
+  }
+  assert.ok(flaggedView(files, cfg).includes("&lt;script&gt;"));
+  assert.ok(studentView(files, "abc", cfg).includes("&lt;script&gt;"));
+});
+
+// Shared with tooling/tests/test_flag.py: both flag rules must agree on these.
+const cases = JSON.parse(readFileSync(new URL("../tooling/tests/fixtures/flag_cases.json", import.meta.url)));
+for (const c of cases) {
+  test(`isFlagged matches shared fixture: ${c.name}`, () => {
+    assert.equal(isFlagged(c.record), c.flagged);
+  });
+}
