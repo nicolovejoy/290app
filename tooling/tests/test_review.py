@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "review"))
 from review import (MARKER, MAX_DIFF_BYTES, MAX_SESSION_BYTES, append_result,  # noqa: E402
                     build_prompt, call_claude, extract_rubric, find_review_note,
                     is_debounced, parse_junit, post_note, render_note, results_location,
-                    truncate, REVIEW_EFFORT, MAX_TOKENS)
+                    truncate, REVIEW_EFFORT, MAX_TOKENS, SYSTEM_PROMPT)
 from schema import build_schema  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -103,6 +103,12 @@ def test_build_prompt_caches_system_and_rubric_not_diff():
     assert "correctness" in blocks[0]["text"] and blocks[0]["cache_control"]
     assert "cache_control" not in blocks[1]
     assert "DIFF" in blocks[1]["text"] and "3 of 4" in blocks[1]["text"] and "LOG" in blocks[1]["text"]
+
+
+def test_prompt_asks_for_own_correctness_judgment():
+    # flag.py compares correctness with the pass rate; copying it would make that check a no-op.
+    assert "passed/total" not in SYSTEM_PROMPT
+    assert "do not copy the test pass rate" in SYSTEM_PROMPT.lower()
 
 
 def test_build_prompt_notes_truncation_and_missing_log():

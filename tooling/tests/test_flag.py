@@ -69,3 +69,9 @@ def test_add_label_adds_once():
     mr.save.assert_called_once()
     add_label(mr)
     mr.save.assert_called_once()
+
+
+def test_integrity_flag_flags():
+    r = review()
+    r["integrity_flag"] = True
+    assert should_flag(r, 10, 10) == (True, "integrity flag")

@@ -7,6 +7,7 @@ const MAX_DISAGREEMENT = 0.2;
 
 // Mirrors should_flag() in tooling/review/flag.py, boundaries included.
 export function isFlagged(run) {
+  if (run.integrity_flag) return true;
   if (run.needs_human) return true;
   if (run.recommended_score < MIN_SCORE) return true;
   const c = (run.rubric_scores || {}).correctness;

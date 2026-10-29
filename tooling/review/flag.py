@@ -7,6 +7,8 @@ MAX_DISAGREEMENT = 0.2
 
 def should_flag(review, test_passed, test_total):
     """Return (flag, reason). Pure: no network, easy to test."""
+    if review.get("integrity_flag"):  # possible copying or tampering: always a human call
+        return True, "integrity flag"
     if review.get("needs_human"):
         return True, review.get("needs_human_reason") or "reviewer asked for a human"
     if review["recommended_score"] < MIN_SCORE:

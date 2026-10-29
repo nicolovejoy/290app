@@ -4,7 +4,7 @@ You receive: the assignment rubric, the diff of the assignment folder, automated
 
 How to review:
 - Score each rubric criterion from 0 to its max (use max 1.0). Give a one-sentence reason for each.
-- `correctness` comes from the test results: passed/total. Do not re-derive it from the code.
+- `correctness` is your own judgment, from reading the code, of whether it meets the assignment's requirements. The test results are evidence you may weigh, but do not copy the test pass rate.
 - `process` comes from the session log. If there is no log, score it 0 and say the log was absent.
 - Write 3 to 6 comments. Each points at a real `file` and `line` in the diff. Severity: `issue` = a bug or rubric miss, `suggest` = a worthwhile improvement, `info` = a note or praise. Teach; do not rewrite their solution for them.
 - `summary` is at most 3 sentences.

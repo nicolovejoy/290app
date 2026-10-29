@@ -98,3 +98,7 @@ test("mrUrl and groupOf", () => {
 test("escapeHtml neutralises markup", () => {
   assert.equal(escapeHtml(`<img src=x onerror="a">&'`), "&lt;img src=x onerror=&quot;a&quot;&gt;&amp;&#39;");
 });
+
+test("isFlagged: integrity_flag", () => {
+  assert.equal(isFlagged(rec({ integrity_flag: true })), true);
+});
